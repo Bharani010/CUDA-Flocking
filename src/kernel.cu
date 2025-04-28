@@ -40,20 +40,20 @@ void checkCUDAError(const char *msg, int line = -1) {
 #define blockSize 128
 
 // Parameters for the boids algorithm with slightly adjusted values
-#define rule1Distance 5.1f
-#define rule2Distance 3.2f
-#define rule3Distance 5.3f
+#define rule1Distance 5.0f
+#define rule2Distance 2.0f
+#define rule3Distance 5.0f
 
 // Squared distance constants for more efficient distance comparisons
 #define rule1DistanceSq (rule1Distance * rule1Distance)
 #define rule2DistanceSq (rule2Distance * rule2Distance)
 #define rule3DistanceSq (rule3Distance * rule3Distance)
 
-#define rule1Scale 0.012f
-#define rule2Scale 0.11f
-#define rule3Scale 0.09f
+#define rule1Scale 0.1f  // Increased from 0.015f - cohesion
+#define rule2Scale 0.15f   // Increased from 0.12f - separation
+#define rule3Scale 0.1f   // Increased from 0.15f - alignment (significantly increased for smoother flocking)
 
-#define maxSpeed 1.1f
+#define maxSpeed 5.0f      // Increased from 1.8f for faster movement
 
 /*! Size of the starting area in simulation space. */
 #define scene_scale 100.0f

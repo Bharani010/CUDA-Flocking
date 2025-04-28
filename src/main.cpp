@@ -18,7 +18,7 @@
 // Default values (can be overridden by command-line arguments)
 int N_FOR_VIS = 25000;
 int simulationMethod = 2; // 0 = Naive, 1 = Scattered Grid, 2 = Coherent Grid
-const float DT = 0.2f;
+const float DT = 0.1f;  // Reduced from 0.2f for smoother motion
 bool enableVisualization = true;
 bool perfTestMode = false;
 

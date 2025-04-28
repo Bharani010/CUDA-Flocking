@@ -14,18 +14,104 @@
 
 // LOOK-2.1 LOOK-2.3 - toggles for UNIFORM_GRID and COHERENT_GRID
 #define VISUALIZE 1
-#define UNIFORM_GRID 0
-#define COHERENT_GRID 0
 
-// LOOK-1.2 - change this to adjust particle count in the simulation
-const int N_FOR_VIS = 5000;
+// Default values (can be overridden by command-line arguments)
+int N_FOR_VIS = 5000;
+int simulationMethod = 0; // 0 = Naive, 1 = Scattered Grid, 2 = Coherent Grid
 const float DT = 0.2f;
+bool enableVisualization = true;
+bool perfTestMode = false;
+
+// Print usage information for command-line arguments
+void printUsage() {
+  std::cout << "Usage: " << std::endl;
+  std::cout << "  ./build/bin/cis565_boids" << std::endl;
+  std::cout << "      Run with visualization using default parameters (5000 boids, Naive method)" << std::endl;
+  std::cout << std::endl;
+  std::cout << "  ./build/bin/cis565_boids --perf-test [mode] [boid_count]" << std::endl;
+  std::cout << "      Run performance test without visualization" << std::endl;
+  std::cout << "      [mode]: Optional integer (0 = Naive, 1 = Scattered Grid, 2 = Coherent Grid)" << std::endl;
+  std::cout << "              If not provided, defaults to 0 (Naive)" << std::endl;
+  std::cout << "      [boid_count]: Optional integer specifying number of boids" << std::endl;
+  std::cout << "                    If not provided, defaults to 5000" << std::endl;
+  std::cout << std::endl;
+  std::cout << "  Examples:" << std::endl;
+  std::cout << "    ./build/bin/cis565_boids --perf-test         # Naive with 5000 boids" << std::endl;
+  std::cout << "    ./build/bin/cis565_boids --perf-test 1       # Scattered Grid with 5000 boids" << std::endl;
+  std::cout << "    ./build/bin/cis565_boids --perf-test 2 10000 # Coherent Grid with 10000 boids" << std::endl;
+}
 
 /**
 * C main function.
 */
 int main(int argc, char* argv[]) {
   projectName = "565 CUDA Intro: Boids";
+
+  // Parse command-line arguments
+  if (argc == 1) {
+    // Default behavior - visualization mode with default parameters
+    enableVisualization = true;
+    perfTestMode = false;
+  } else if (argc >= 2 && std::string(argv[1]) == "--perf-test") {
+    // Performance test mode
+    enableVisualization = false;
+    perfTestMode = true;
+    
+    // Set default values first
+    simulationMethod = 0; // Default to Naive
+    N_FOR_VIS = 5000;     // Default to 5000 boids
+    
+    // Check for optional mode parameter
+    if (argc >= 3) {
+      try {
+        simulationMethod = std::stoi(argv[2]);
+        if (simulationMethod < 0 || simulationMethod > 2) {
+          std::cerr << "Error: Invalid simulation method. Valid values are 0, 1, or 2." << std::endl;
+          printUsage();
+          return 1;
+        }
+      } catch (const std::invalid_argument&) {
+        std::cerr << "Error: Invalid simulation method format" << std::endl;
+        printUsage();
+        return 1;
+      } catch (const std::out_of_range&) {
+        std::cerr << "Error: Simulation method out of range" << std::endl;
+        return 1;
+      }
+    }
+    
+    // Check for optional boid count parameter
+    if (argc >= 4) {
+      try {
+        N_FOR_VIS = std::stoi(argv[3]);
+        if (N_FOR_VIS <= 0) {
+          std::cerr << "Error: Boid count must be positive" << std::endl;
+          printUsage();
+          return 1;
+        }
+      } catch (const std::invalid_argument&) {
+        std::cerr << "Error: Invalid boid count format" << std::endl;
+        printUsage();
+        return 1;
+      } catch (const std::out_of_range&) {
+        std::cerr << "Error: Boid count out of range" << std::endl;
+        return 1;
+      }
+    }
+  } else {
+    std::cerr << "Error: Invalid arguments" << std::endl;
+    printUsage();
+    return 1;
+  }
+  
+  // Display simulation configuration
+  std::string methodName;
+  if (simulationMethod == 0) methodName = "Naive";
+  else if (simulationMethod == 1) methodName = "Scattered Grid";
+  else methodName = "Coherent Grid";
+  
+  std::cout << "Running simulation with " << N_FOR_VIS << " boids, method: " 
+            << methodName << (enableVisualization ? " (with visualization)" : " (performance test)") << std::endl;
 
   if (init(argc, argv)) {
     mainLoop();
@@ -196,17 +282,19 @@ void initShaders(GLuint * program) {
     cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
 
     // execute the kernel
-    #if UNIFORM_GRID && COHERENT_GRID
-    Boids::stepSimulationCoherentGrid(DT);
-    #elif UNIFORM_GRID
-    Boids::stepSimulationScatteredGrid(DT);
-    #else
-    Boids::stepSimulationNaive(DT);
-    #endif
+    if (simulationMethod == 2) {
+      Boids::stepSimulationCoherentGrid(DT);
+    } else if (simulationMethod == 1) {
+      Boids::stepSimulationScatteredGrid(DT);
+    } else {
+      Boids::stepSimulationNaive(DT);
+    }
 
-    #if VISUALIZE
-    Boids::copyBoidsToVBO(dptrVertPositions, dptrVertVelocities);
-    #endif
+    // Only copy to VBO if visualization is enabled
+    if (enableVisualization) {
+      Boids::copyBoidsToVBO(dptrVertPositions, dptrVertVelocities);
+    }
+    
     // unmap buffer object
     cudaGLUnmapBufferObject(boidVBO_positions);
     cudaGLUnmapBufferObject(boidVBO_velocities);
@@ -216,50 +304,101 @@ void initShaders(GLuint * program) {
     double fps = 0;
     double timebase = 0;
     int frame = 0;
+    
+    // Performance metrics
+    const int numFramesToMeasure = 100;
+    double totalSimTime = 0.0;
+    int failedLaunches = 0;
 
-    Boids::unitTest(); // LOOK-1.2 We run some basic example code to make sure
-                       // your CUDA development setup is ready to go.
-
-    while (!glfwWindowShouldClose(window)) {
-      glfwPollEvents();
-
-      frame++;
-      double time = glfwGetTime();
-
-      if (time - timebase > 1.0) {
-        fps = frame / (time - timebase);
-        timebase = time;
-        frame = 0;
+    Boids::unitTest(); // Run the unit test first
+    
+    if (perfTestMode) {
+      // Performance test mode - no visualization
+      std::cout << "Starting performance test for " << numFramesToMeasure << " frames..." << std::endl;
+      
+      try {
+        for (int i = 0; i < numFramesToMeasure; i++) {
+          double startTime = glfwGetTime();
+          
+          runCUDA();
+          cudaDeviceSynchronize();
+          
+          double endTime = glfwGetTime();
+          totalSimTime += (endTime - startTime);
+          
+          // Show progress every 10 frames
+          if (i % 10 == 0) {
+            std::cout << "Progress: " << i << "/" << numFramesToMeasure << " frames" << std::endl;
+          }
+        }
+      } catch (const std::exception& e) {
+        std::cerr << "Error during simulation: " << e.what() << std::endl;
+        failedLaunches++;
+      } catch (...) {
+        std::cerr << "Unknown error during simulation!" << std::endl;
+        failedLaunches++;
       }
+      
+      // Calculate and output performance metrics
+      double avgSimTime = totalSimTime / (numFramesToMeasure - failedLaunches);
+      double avgFPS = (numFramesToMeasure - failedLaunches) / totalSimTime;
+      
+      std::string methodName;
+      if (simulationMethod == 0) methodName = "Naive";
+      else if (simulationMethod == 1) methodName = "Scattered Grid";
+      else methodName = "Coherent Grid";
+      
+      std::cout << "\n=========== PERFORMANCE METRICS ===========" << std::endl;
+      std::cout << "Boid Count: " << N_FOR_VIS << std::endl;
+      std::cout << "Method: " << methodName << std::endl;
+      std::cout << "Average FPS: " << avgFPS << std::endl;
+      std::cout << "Average Simulation Time per Step (ms): " << (avgSimTime * 1000.0) << std::endl;
+      std::cout << "Failed Launches: " << failedLaunches << std::endl;
+      std::cout << "=========================================" << std::endl;
+    } else {
+      // Interactive visualization mode
+      while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
 
-      runCUDA();
+        frame++;
+        double time = glfwGetTime();
 
-      std::ostringstream ss;
-      ss << "[";
-      ss.precision(1);
-      ss << std::fixed << fps;
-      ss << " fps] " << deviceName;
-      glfwSetWindowTitle(window, ss.str().c_str());
+        if (time - timebase > 1.0) {
+          fps = frame / (time - timebase);
+          timebase = time;
+          frame = 0;
+        }
 
-      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        runCUDA();
 
-      #if VISUALIZE
-      glUseProgram(program[PROG_BOID]);
-      glBindVertexArray(boidVAO);
-      glPointSize((GLfloat)pointSize);
-      glDrawElements(GL_POINTS, N_FOR_VIS + 1, GL_UNSIGNED_INT, 0);
-      glPointSize(1.0f);
+        std::ostringstream ss;
+        ss << "[";
+        ss.precision(1);
+        ss << std::fixed << fps;
+        ss << " fps] " << deviceName;
+        glfwSetWindowTitle(window, ss.str().c_str());
 
-      glUseProgram(0);
-      glBindVertexArray(0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-      glfwSwapBuffers(window);
-      #endif
+        // Only draw if visualization is enabled
+        if (enableVisualization) {
+          glUseProgram(program[PROG_BOID]);
+          glBindVertexArray(boidVAO);
+          glPointSize((GLfloat)pointSize);
+          glDrawElements(GL_POINTS, N_FOR_VIS + 1, GL_UNSIGNED_INT, 0);
+          glPointSize(1.0f);
+
+          glUseProgram(0);
+          glBindVertexArray(0);
+
+          glfwSwapBuffers(window);
+        }
+      }
     }
+    
     glfwDestroyWindow(window);
     glfwTerminate();
   }
-
 
   void errorCallback(int error, const char *description) {
     fprintf(stderr, "error %d: %s\n", error, description);

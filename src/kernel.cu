@@ -44,6 +44,11 @@ void checkCUDAError(const char *msg, int line = -1) {
 #define rule2Distance 3.2f
 #define rule3Distance 5.3f
 
+// Squared distance constants for more efficient distance comparisons
+#define rule1DistanceSq (rule1Distance * rule1Distance)
+#define rule2DistanceSq (rule2Distance * rule2Distance)
+#define rule3DistanceSq (rule3Distance * rule3Distance)
+
 #define rule1Scale 0.012f
 #define rule2Scale 0.11f
 #define rule3Scale 0.09f
@@ -148,8 +153,9 @@ void Boids::initSimulation(int N) {
     d_boidPositions, scene_scale);
   checkCUDAErrorWithLine("kernGenerateRandomPosArray failed!");
 
-  // Compute grid parameters
-  gridCellWidth = 0.6f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance);
+  // Compute grid parameters with optimized cell size
+  // Adjusted factor to balance cell size for efficient neighbor searches, improving visualization smoothness
+  gridCellWidth = 0.55f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance);
   int halfSideCount = (int)(scene_scale / gridCellWidth) + 1;
   gridSideCount = 2 * halfSideCount;
 
@@ -267,21 +273,22 @@ __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *po
     if (i == iSelf) continue; // Skip self
     
     glm::vec3 otherPos = pos[i];
-    float dist = glm::length(otherPos - selfPos);
+    glm::vec3 diff = otherPos - selfPos;
+    float distSq = glm::dot(diff, diff); // Squared distance - eliminates sqrt calculation
     
     // Rule 2: Separation - avoid crowding neighbors
-    if (dist < rule2Distance) {
-      rule2Vector -= (otherPos - selfPos);
+    if (distSq < rule2DistanceSq) {
+      rule2Vector -= diff; // Using diff directly rather than recomputing direction
     }
     
     // Rule 1: Cohesion - fly towards the center of mass of neighbors
-    if (dist < rule1Distance) {
+    if (distSq < rule1DistanceSq) {
       rule1Vector += otherPos;
       rule1Count++;
     }
     
     // Rule 3: Alignment - match velocity with nearby boids
-    if (dist < rule3Distance) {
+    if (distSq < rule3DistanceSq) {
       rule3Vector += vel[i];
       rule3Count++;
     }
@@ -455,18 +462,18 @@ __global__ void kernUpdateVelNeighborSearchScattered(
   int rule1Count = 0;
   int rule3Count = 0;
   
-  // Check neighboring cells in z, y, x order for better memory coherence
-  for (int zOffset = -1; zOffset <= 1; zOffset++) {
-    int neighborZ = gridZ + zOffset;
-    if (neighborZ < 0 || neighborZ >= gridResolution) continue;
+  // Using x, y, z order to optimize memory access for scattered data
+  for (int xOffset = -1; xOffset <= 1; xOffset++) {
+    int neighborX = gridX + xOffset;
+    if (neighborX < 0 || neighborX >= gridResolution) continue;
     
     for (int yOffset = -1; yOffset <= 1; yOffset++) {
       int neighborY = gridY + yOffset;
       if (neighborY < 0 || neighborY >= gridResolution) continue;
       
-      for (int xOffset = -1; xOffset <= 1; xOffset++) {
-        int neighborX = gridX + xOffset;
-        if (neighborX < 0 || neighborX >= gridResolution) continue;
+      for (int zOffset = -1; zOffset <= 1; zOffset++) {
+        int neighborZ = gridZ + zOffset;
+        if (neighborZ < 0 || neighborZ >= gridResolution) continue;
         
         // Get the grid cell index
         int gridIndex = gridIndex3Dto1D(neighborX, neighborY, neighborZ, gridResolution);
@@ -484,21 +491,22 @@ __global__ void kernUpdateVelNeighborSearchScattered(
           if (boidIndex == index) continue; // Skip self
           
           glm::vec3 otherPos = pos[boidIndex];
-          float dist = glm::length(otherPos - boidPos);
+          glm::vec3 diff = otherPos - boidPos;
+          float distSq = glm::dot(diff, diff); // Squared distance - eliminates sqrt calculation
           
           // Rule 2: Separation - avoid crowding neighbors
-          if (dist < rule2Distance) {
-            rule2Vector -= (otherPos - boidPos);
+          if (distSq < rule2DistanceSq) {
+            rule2Vector -= diff; // Using diff directly rather than recomputing direction
           }
           
           // Rule 1: Cohesion - fly towards center of mass
-          if (dist < rule1Distance) {
+          if (distSq < rule1DistanceSq) {
             rule1Vector += otherPos;
             rule1Count++;
           }
           
           // Rule 3: Alignment - match velocity with nearby boids
-          if (dist < rule3Distance) {
+          if (distSq < rule3DistanceSq) {
             rule3Vector += vel1[boidIndex];
             rule3Count++;
           }
@@ -563,8 +571,7 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
   int rule1Count = 0;
   int rule3Count = 0;
   
-  // Use z, y, x order for better memory coherence
-  // We can optimize the memory access pattern since data is coherent
+  // Optimized z, y, x order for memory coherence with sorted data
   for (int zOffset = -1; zOffset <= 1; zOffset++) {
     int neighborZ = gridZ + zOffset;
     if (neighborZ < 0 || neighborZ >= gridResolution) continue;
@@ -594,21 +601,22 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
           
           // Direct access to position and velocity data
           glm::vec3 otherPos = pos[i];
-          float dist = glm::length(otherPos - boidPos);
+          glm::vec3 diff = otherPos - boidPos;
+          float distSq = glm::dot(diff, diff); // Squared distance - eliminates sqrt calculation
           
           // Rule 2: Separation - avoid crowding neighbors
-          if (dist < rule2Distance) {
-            rule2Vector -= (otherPos - boidPos);
+          if (distSq < rule2DistanceSq) {
+            rule2Vector -= diff; // Using diff directly rather than recomputing direction
           }
           
           // Rule 1: Cohesion - fly towards center of mass
-          if (dist < rule1Distance) {
+          if (distSq < rule1DistanceSq) {
             rule1Vector += otherPos;
             rule1Count++;
           }
           
           // Rule 3: Alignment - match velocity with nearby boids
-          if (dist < rule3Distance) {
+          if (distSq < rule3DistanceSq) {
             rule3Vector += vel1[i]; // Direct access
             rule3Count++;
           }
@@ -774,10 +782,10 @@ void Boids::stepSimulationCoherentGrid(float dt) {
   // Step 7: Ping-pong the velocity buffers for the next step
   std::swap(d_sortedVelocitiesA, d_sortedVelocitiesB);
   
-  // Copy data back to main arrays (for visualization)
-  cudaMemcpy(d_boidPositions, d_sortedPositions, numObjects * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
-  cudaMemcpy(d_velocitiesA, d_sortedVelocitiesA, numObjects * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
-  checkCUDAErrorWithLine("Memory copy back to main arrays failed!");
+  // Step 8: Swap main pointers with sorted data instead of copying
+  // This eliminates expensive memory transfers for smoother visualization
+  std::swap(d_boidPositions, d_sortedPositions);
+  std::swap(d_velocitiesA, d_sortedVelocitiesA);
 }
 
 void Boids::endSimulation() {

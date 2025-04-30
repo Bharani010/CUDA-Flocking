@@ -500,16 +500,13 @@ __global__ void kernUpdateVelNeighborSearchScattered(
 	int rule3Count = 0;
 
 	// Reordered loops for X-Y-Z order as requested for scattered
-	for (int k = -1; k <= 1; k++) { // x-axis (innermost)
-		int neighborZ = min(max(gridX + k, 0), gridResolution - 1);
-
-		for (int j = -1; j <= 1; j++) { // y-axis (middle)
+	for (int i = -1; i <= 1; ++i) {                                         // X  (innermost)
+		int neighborX = min(max(gridX + i, 0), gridResolution - 1);
+		for (int j = -1; j <= 1; ++j) {                                     // Y  (middle)
 			int neighborY = min(max(gridY + j, 0), gridResolution - 1);
+			for (int k = -1; k <= 1; ++k) {                                 // Z  (outermost)
+				int neighborZ = min(max(gridZ + k, 0), gridResolution - 1);
 
-			for (int i = -1; i <= 1; i++) { // z-axis (outermost)
-				int neighborX = min(max(gridZ + i, 0), gridResolution - 1);
-
-				// Get the grid cell index
 				int gridIndex = gridIndex3Dto1D(neighborX, neighborY, neighborZ, gridResolution);
 
 				// Get the start and end indices for this cell in the sorted array
@@ -752,22 +749,20 @@ void Boids::stepSimulationScatteredGrid(float dt) {
 */
 void Boids::stepSimulationCoherentGrid(float dt)
 {
-// in stepSimulationCoherentGrid()
-dim3 cellBlocks((gridCellCount + blockSize - 1) / blockSize);   // add this
+	dim3 cellBlocks((gridCellCount + blockSize - 1) / blockSize);   // for grid cell operations
+	dim3 objBlocks((numObjects + blockSize - 1) / blockSize);       // for per-boid kernels
 
-// --- replace the two reset launches ---
-kernResetIntBuffer<<<cellBlocks, blockSize>>>(gridCellCount, d_gridCellStart, -1);
-kernResetIntBuffer<<<cellBlocks, blockSize>>>(gridCellCount, d_gridCellEnd  , -1);
-
+	// Step 1: Reset grid cell start/end indices - use cellBlocks
+	kernResetIntBuffer<<<cellBlocks, blockSize>>>(gridCellCount, d_gridCellStart, -1);
+	kernResetIntBuffer<<<cellBlocks, blockSize>>>(gridCellCount, d_gridCellEnd, -1);
 	checkCUDAErrorWithLine("kernResetIntBuffer failed!");
 
-	// Step 2: Compute boid indices
-	kernComputeIndices <<< cellBlocks, blockSize >> > (
+	// Step 2: Compute boid indices - use objBlocks
+	kernComputeIndices<<<objBlocks, blockSize>>>(
 		numObjects, gridSideCount,
 		gridMinimum, gridInverseCellWidth,
 		d_boidPositions, d_boidArrayIdx, d_boidGridIdx);
 	checkCUDAErrorWithLine("kernComputeIndices failed!");
-	// Removed cudaDeviceSynchronize
 
 	// Step 3: Sort boids by grid cell index using Thrust (every frame)
 	// Uses d_boidGridIdx (keys) and d_boidArrayIdx (values)
@@ -775,38 +770,29 @@ kernResetIntBuffer<<<cellBlocks, blockSize>>>(gridCellCount, d_gridCellEnd  , -1
 	thrust::device_ptr<int> d_thrust_boidArrayIdx_local(d_boidArrayIdx); // Wrap locally
 	thrust::sort_by_key(thrust::device, d_thrust_boidGridIdx_local, d_thrust_boidGridIdx_local + numObjects, d_thrust_boidArrayIdx_local);
 	checkCUDAErrorWithLine("thrust sorting failed!");
-	// Removed cudaDeviceSynchronize
 
-	// Step 4: Identify start/end indices of each cell in the sorted arrays
-	// Uses sorted d_boidGridIdx, fills d_gridCellStart, d_gridCellEnd
-	kernIdentifyCellStartEnd <<< cellBlocks, blockSize >> > (
+	// Step 4: Identify start/end indices of each cell in the sorted arrays - use objBlocks
+	kernIdentifyCellStartEnd<<<objBlocks, blockSize>>>(
 		numObjects, d_boidGridIdx, d_gridCellStart, d_gridCellEnd);
 	checkCUDAErrorWithLine("kernIdentifyCellStartEnd failed!");
-	// Removed cudaDeviceSynchronize
 
-	// Step 5: Rearrange boid data (positions and velocities) to be coherent in memory
-	// Corresponds to kernSetCoherentPosVel in reference
-	// Copies from d_boidPositions (main pos) and d_velocitiesA (main vel) to d_sortedPositions (coherent pos input) and d_sortedVelocitiesA (coherent vel input) using d_boidArrayIdx
-	kernRearrangeBoidData <<< cellBlocks, blockSize >> > (
+	// Step 5: Rearrange boid data (positions and velocities) to be coherent in memory - use objBlocks
+	kernRearrangeBoidData<<<objBlocks, blockSize>>>(
 		numObjects, d_boidArrayIdx,
 		d_boidPositions, d_velocitiesA, // Source from main buffers
 		d_sortedPositions, d_sortedVelocitiesA); // Destination to coherent buffers
 	checkCUDAErrorWithLine("kernRearrangeBoidData failed!");
-	// Removed cudaDeviceSynchronize
 
-	// Step 6: Update velocities using coherent grid-based neighbor search
-	// Reads from d_sortedPositions (coherent pos input) and d_sortedVelocitiesA (coherent vel input)
-	// Writes results to d_velocitiesB (main vel B, used as temp output buffer, corresponds to dev_vel2 in reference call)
-	kernUpdateVelNeighborSearchCoherent <<< cellBlocks, blockSize >> > (
+	// Step 6: Update velocities using coherent grid-based neighbor search - use objBlocks
+	kernUpdateVelNeighborSearchCoherent<<<objBlocks, blockSize>>>(
 		numObjects, gridSideCount, gridMinimum, gridInverseCellWidth, gridCellWidth,
 		d_gridCellStart, d_gridCellEnd,
 		d_sortedPositions, d_sortedVelocitiesA, // Inputs from coherent buffers
 		d_velocitiesB); // Output to main vel B (temp buffer)
 	checkCUDAErrorWithLine("kernUpdateVelNeighborSearchCoherent failed!");
-	// Removed cudaDeviceSynchronize
 
-	// Step 7: Update positions using the newly calculated velocities
-	kernUpdatePos <<< cellBlocks, blockSize >>> (
+	// Step 7: Update positions using the newly calculated velocities - use objBlocks
+	kernUpdatePos<<<objBlocks, blockSize>>>(
 		numObjects, dt, d_sortedPositions, d_velocitiesB);
 	checkCUDAErrorWithLine("kernUpdatePos failed!");
 
@@ -818,7 +804,12 @@ kernResetIntBuffer<<<cellBlocks, blockSize>>>(gridCellCount, d_gridCellEnd  , -1
 	std::swap(d_boidPositions, d_sortedPositions);
 
 	// 3) make next-frame coherent velocity input the latest results
-	std::swap(d_velocitiesA, d_sortedVelocitiesA);
+// 3) make next-frame coherent velocity INPUT a **copy** of the new velocities
+cudaMemcpy(d_sortedVelocitiesA,            // dst (coherent buffer)
+           d_velocitiesA,                  // src (fresh velocities)
+           numObjects * sizeof(glm::vec3),
+           cudaMemcpyDeviceToDevice);
+checkCUDAErrorWithLine("copy vel -> coherent failed!");
 }
 
 

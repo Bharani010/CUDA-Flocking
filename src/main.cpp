@@ -8,19 +8,28 @@
 
 #include "main.hpp"
 
+// For additional timing tests
+#include <vector>
+#include <iostream>
+
 // ================
 // Configuration
 // ================
 
-// LOOK-2.1 LOOK-2.3 - toggles for UNIFORM_GRID and COHERENT_GRID
 #define VISUALIZE 1
 
 // Default values (can be overridden by command-line arguments)
 int N_FOR_VIS = 25000;
 int simulationMethod = 2; // 0 = Naive, 1 = Scattered Grid, 2 = Coherent Grid
 const float DT = 0.1f;  // Reduced from 0.2f for smoother motion
+
+// New flags for controlling execution mode
 bool enableVisualization = true;
 bool perfTestMode = false;
+bool perfTestBlockSize = false;
+
+// Standard boid sizes to test
+std::vector<int> standardBoidSizes = {5000, 10000, 25000, 50000, 70000, 100000, 500000, 1000000, 2500000, 5000000};
 
 // Print usage information for command-line arguments
 void printUsage() {
@@ -37,10 +46,79 @@ void printUsage() {
   std::cout << "  ./bin/cis565_boids --perf-test <mode> <boid_count>" << std::endl;
   std::cout << "      Run performance test for a single boid count" << std::endl;
   std::cout << std::endl;
+  std::cout << "  ./bin/cis565_boids --perf-test-block-size" << std::endl;
+  std::cout << "      Run block size performance test for all three methods with 25,000 boids" << std::endl;
+  std::cout << std::endl;
   std::cout << "  Examples:" << std::endl;
   std::cout << "    ./bin/cis565_boids --mode coherent --boids 10000" << std::endl;
   std::cout << "    ./bin/cis565_boids --perf-test naive" << std::endl;
   std::cout << "    ./bin/cis565_boids --perf-test scattered 10000" << std::endl;
+  std::cout << "    ./bin/cis565_boids --perf-test-block-size" << std::endl;
+}
+
+// Updated block size performance test to include FPS
+void runBlockSizeTest(int numBoids, int numSteps) {
+  std::vector<int> methods = {0, 1, 2};
+  std::vector<std::string> methodNames = {"Naive", "Scattered Grid", "Coherent Grid"};
+  std::vector<int> blockSizes = {32, 64, 128, 256, 512, 1024};
+  
+  std::cout << "\n===============================================================" << std::endl;
+  std::cout << "BLOCK SIZE PERFORMANCE TEST WITH " << numBoids << " BOIDS" << std::endl;
+  std::cout << "===============================================================\n" << std::endl;
+  
+  for (int method : methods) {
+    std::cout << "\n===========================================" << std::endl;
+    std::cout << "TESTING " << methodNames[method] << " IMPLEMENTATION" << std::endl;
+    std::cout << "===========================================\n" << std::endl;
+    
+    for (int blockSize : blockSizes) {
+      std::cout << "Block size: " << blockSize << std::endl;
+      
+      simulationMethod = method;
+      Boids::currentBlockSize = blockSize;
+      Boids::initSimulation(numBoids);
+      
+      // Warmup runs
+      for (int i = 0; i < 10; ++i) {
+        if (method == 0) Boids::stepSimulationNaive(DT);
+        else if (method == 1) Boids::stepSimulationScatteredGrid(DT);
+        else Boids::stepSimulationCoherentGrid(DT);
+      }
+      
+      // Timing test
+      cudaEvent_t start, stop;
+      cudaEventCreate(&start);
+      cudaEventCreate(&stop);
+      cudaEventRecord(start);
+      
+      for (int i = 0; i < numSteps; ++i) {
+        if (method == 0) Boids::stepSimulationNaive(DT);
+        else if (method == 1) Boids::stepSimulationScatteredGrid(DT);
+        else Boids::stepSimulationCoherentGrid(DT);
+      }
+      
+      cudaEventRecord(stop);
+      cudaEventSynchronize(stop);
+      float timeMs;
+      cudaEventElapsedTime(&timeMs, start, stop);
+      
+      float avgTimePerStep = timeMs / numSteps;
+      float fps = 1000.0f / avgTimePerStep;
+      std::cout << "  Time: " << avgTimePerStep << " ms" << std::endl;
+      std::cout << "  FPS: " << fps << std::endl;
+      std::cout << std::endl;
+      
+      Boids::endSimulation();
+      cudaEventDestroy(start);
+      cudaEventDestroy(stop);
+    }
+    
+    std::cout << "Completed testing for " << methodNames[method] << " implementation." << std::endl;
+  }
+  
+  std::cout << "\n===============================================================" << std::endl;
+  std::cout << "Block size performance test completed." << std::endl;
+  std::cout << "===============================================================" << std::endl;
 }
 
 /**
@@ -164,6 +242,10 @@ int main(int argc, char* argv[]) {
         runAllBoidSizes = true;
       }
     }
+    else if (arg == "--perf-test-block-size") {
+      perfTestBlockSize = true;
+      enableVisualization = false;
+    }
     else {
       std::cerr << "Error: Unknown argument: " << arg << std::endl;
       printUsage();
@@ -171,6 +253,12 @@ int main(int argc, char* argv[]) {
     }
   }
   
+  // Handle special performance test mode
+  if (perfTestBlockSize) {
+    runBlockSizeTest(25000, 100);
+    return 0;
+  }
+
   // Get method name for display
   std::string methodName;
   if (simulationMethod == 0) methodName = "Naive";
@@ -179,7 +267,7 @@ int main(int argc, char* argv[]) {
   
   // Handle the case to run tests with all boid sizes
   if (runAllBoidSizes) {
-    std::vector<int> boidSizes = {5000, 10000, 25000, 50000, 70000, 100000, 500000, 1000000, 2500000, 5000000};
+    std::vector<int> boidSizes = standardBoidSizes;
     std::cout << "Running performance tests for method: " << methodName << " with all boid sizes\n" << std::endl;
     
     for (int size : boidSizes) {

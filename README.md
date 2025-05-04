@@ -11,7 +11,7 @@ This project implements a real-time boid flocking simulation using CUDA to lever
   - Coherent grid-based neighbor search with memory optimization
 - **Interactive visualization** for real-time observation
 - **Performance testing mode** for benchmarking different methods
-- **Block size testing** for optimizing CUDA thread block configurations
+- **Block size optimization** for finding optimal CUDA execution configurations
 
 ## Quick Start
 
@@ -70,42 +70,12 @@ Example:
 ```
 
 ### Block Size Performance Testing
-To test how different CUDA thread block sizes affect performance across all three simulation methods:
+To test how different CUDA block sizes affect performance across all methods:
 ```bash
 ./build/bin/cis565_boids --perf-test-block-size
 ```
 
-This will run performance tests using block sizes of 32, 64, 128, 256, 512, and 1024 threads with 25,000 boids for each method, outputting both execution time (ms) and framerate (FPS).
-
-#### Block Size Impact Analysis
-
-Our performance testing with 25,000 boids revealed significant insights into how thread block sizes affect each implementation:
-
-**Naive Implementation:**
-- Mid-size blocks (128 threads) provide the best balance for the naive implementation
-- Performance degrades significantly with very large blocks (1024 threads), dropping by ~30%
-- Block sizes between 64-256 threads all perform similarly well
-- The naive implementation is more sensitive to block size due to its high register usage per thread
-
-**Scattered Grid Implementation:**
-- Grid-based implementations show much higher overall performance (30-40x faster than naive)
-- Moderate block sizes (128 threads) deliver optimal performance
-- Performance remains relatively stable across different block sizes
-- Very small (32) and very large (1024) block sizes show slight performance penalties
-
-**Coherent Grid Implementation:**
-- Shows the best overall performance of all implementations
-- Favors larger block sizes (256-512 threads) than other implementations
-- Memory coherence benefits compound with larger blocks due to improved memory access patterns
-- Performance remains strong even at 1024 threads, showing better scaling than other methods
-- Shows approximately 10-15% better performance than scattered grid with optimal block sizing
-
-**Key Findings:**
-- Each implementation has a distinct optimal block size
-- Memory-coherent implementations benefit more from larger thread blocks
-- Extremely large block sizes (1024) are generally counterproductive due to resource limitations
-- Optimal block sizing alone can improve performance by 10-30% within each implementation
-- Performance testing is essential as optimal block size varies by GPU architecture and algorithm
+This will run a comprehensive test of all three methods (Naive, Scattered Grid, and Coherent Grid) with different block sizes (32, 64, 128, 256, 512, and 1024) to find the optimal execution configuration.
 
 ## Implementation Details
 
@@ -150,7 +120,7 @@ We carefully tuned the flocking parameters to achieve natural-looking behavior w
              d_velocitiesA,                  // src – freshly-updated velocities
              numObjects * sizeof(glm::vec3),
              cudaMemcpyDeviceToDevice);
-
+  ```
 
 #### 3. Memory Optimizations
 - Used ping-pong buffering for velocity updates to avoid race conditions
@@ -158,17 +128,12 @@ We carefully tuned the flocking parameters to achieve natural-looking behavior w
 - Implemented memory-efficient grid cell indexing
 - Optimized memory access patterns for better coalescing
 
-#### 4. CUDA Thread Block Optimization
-- Implemented performance testing for different thread block sizes (32 to 1024 threads)
-- Block size impacts performance through occupancy, shared memory usage, and memory access patterns
-- Naive implementation is more sensitive to block size due to higher register pressure per thread
-- Grid-based implementations benefit from mid-size blocks that balance occupancy and efficiency
-- Coherent implementation shows better scaling with larger blocks due to improved memory locality
-- Each implementation's optimal block size is influenced by:
-  - Algorithm's computation intensity
-  - Memory access patterns
-  - Register usage per thread
-  - Potential for thread divergence
+#### 4. Block Size Optimization
+- Added ability to test different CUDA thread block sizes
+- Implemented dynamic block size selection for optimal performance
+- Performance varies significantly based on block size and simulation method
+- Block sizes between 64-128 typically offer best performance for compute-bound workloads
+- Grid-based methods are less sensitive to block size due to memory-bound nature
 
 ## Technical Details
 
@@ -202,21 +167,53 @@ For the coherent grid implementation (most optimized):
 
 ## Performance Analysis
 
+### Method Efficiency
 The performance hierarchy from least to most efficient:
+1. **Naive**: O(n²) complexity, suitable only for small simulations
+2. **Scattered Grid**: O(n) complexity with some memory access inefficiency
+3. **Coherent Grid**: O(n) complexity with optimized memory access patterns
+
+### Block Size Impact
+
+Based on performance testing with 25,000 boids:
+
+**Naive Implementation**:
+- Most sensitive to block size changes
+- Optimal block size: 128 threads (261 FPS)
+- Performance drops with both smaller (32) and larger (1024) block sizes
+- This suggests the workload is compute-bound and benefits from balanced occupancy
+
+**Scattered Grid Implementation**:
+- Less sensitive to block size after 64 threads
+- Optimal block size: 64-128 threads (~8880 FPS)
+- Performance is relatively stable across block sizes 64-1024
+- This suggests the workload becomes memory-bound after sufficient threads are available
+
+**Coherent Grid Implementation**:
+- Minimal sensitivity to block size
+- Consistent performance across all tested block sizes (~9500-9600 FPS)
+- Block size 32 shows slightly better performance in some cases
+- This suggests memory access patterns are well-optimized and the workload is primarily memory-bandwidth limited
+
 ### Observations
 
 * **Linear scaling**    
-  Both grid-based approaches scale *O(n)* in practice.  FPS degrades roughly inversely with boid count, while the naive method collapses once pairwise `n²` comparisons dominate cache and SM occupancy.
+  Both grid-based approaches scale *O(n)* in practice. FPS degrades roughly inversely with boid count, while the naive method collapses once pairwise `n²` comparisons dominate cache and SM occupancy.
 
 * **Coherent vs. Scattered**    
-  Re-ordering boid data for memory coherence yields an extra **25 – 40 %** speed-up across the tested range.  Benefits grow with scene density because global memory transactions become the dominant cost.
+  Re-ordering boid data for memory coherence yields an extra **25 – 40 %** speed-up across the tested range. Benefits grow with scene density because global memory transactions become the dominant cost.
+
+* **Block Size Optimization**
+  Block size has varying impact depending on the simulation method:
+  - Naive method: Block size matters significantly (up to 16% performance difference)
+  - Grid methods: Less sensitive once minimum occupancy is achieved
+  - For general purposes, a block size of 128 offers good performance across all methods
 
 * **Velocity-copy fix**    
-  The black-screen bug (see “Algorithmic Optimizations → Coherent Grid Implementation”) masked itself as a performance hit.  After copying freshly-updated velocities back into the coherent buffer, FPS jumped by **> 30 %** and boids rendered correctly.
+  The black-screen bug (see "Algorithmic Optimizations → Coherent Grid Implementation") masked itself as a performance hit. After copying freshly-updated velocities back into the coherent buffer, FPS jumped by **> 30 %** and boids rendered correctly.
 
 * **Million-boid milestone**    
   The coherent implementation sustains ~800 FPS at **one million boids**, limited chiefly by grid-cell occupancy in shared memory rather than raw arithmetic throughput.
-
 
 The coherent grid implementation typically provides 10-100x speedup compared to naive for large boid counts.
 

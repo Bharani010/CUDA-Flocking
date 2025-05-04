@@ -10,6 +10,9 @@
 #include <vector>
 
 namespace Boids {
+    // variable to control block size for performance testing
+    extern int currentBlockSize;
+    
     void initSimulation(int N);
     void stepSimulationNaive(float dt);
     void stepSimulationScatteredGrid(float dt);

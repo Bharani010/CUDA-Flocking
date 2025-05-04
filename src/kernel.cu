@@ -51,7 +51,7 @@ void checkCUDAError(const char *msg, int line = -1) {
 /*! Block size used for CUDA kernel launch. */
 #define blockSize 128
 
-// Parameters for the boids algorithm.
+// Configuration for the boids algorithm.
 #define rule1Distance 5.0f // Cohesion distance
 #define rule2Distance 3.0f // Separation distance
 #define rule3Distance 5.0f // Alignment distance
@@ -61,6 +61,9 @@ void checkCUDAError(const char *msg, int line = -1) {
 #define rule3Scale 0.1f  // Alignment force scale
 
 #define maxSpeed 1.0f    // Maximum boid speed
+
+// Variable to control block size for performance testing
+int Boids::currentBlockSize = blockSize;
 
 /*! Size of the starting area in simulation space. */
 #define scene_scale 100.0f

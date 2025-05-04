@@ -11,6 +11,7 @@
 // For additional timing tests
 #include <vector>
 #include <iostream>
+#include <chrono> // Added for non-GLFW timing
 
 // ================
 // Configuration
@@ -56,7 +57,7 @@ void printUsage() {
   std::cout << "    ./bin/cis565_boids --perf-test-block-size" << std::endl;
 }
 
-// Updated block size performance test to include FPS
+// Updated block size performance test to use chrono instead of GLFW for timing
 void runBlockSizeTest(int numBoids, int numSteps) {
   std::vector<int> methods = {0, 1, 2};
   std::vector<std::string> methodNames = {"Naive", "Scattered Grid", "Coherent Grid"};
@@ -85,7 +86,7 @@ void runBlockSizeTest(int numBoids, int numSteps) {
         else Boids::stepSimulationCoherentGrid(DT);
       }
       
-      // Timing test
+      // Timing test using CUDA events
       cudaEvent_t start, stop;
       cudaEventCreate(&start);
       cudaEventCreate(&stop);
@@ -331,6 +332,7 @@ bool init(int argc, char **argv) {
   ss << projectName << " [SM " << major << "." << minor << " " << deviceProp.name << "]";
   deviceName = ss.str();
 
+  // Only initialize GLFW and OpenGL if visualization is needed
   if (enableVisualization) {
     // Window setup stuff
     glfwSetErrorCallback(errorCallback);
@@ -378,13 +380,9 @@ bool init(int argc, char **argv) {
     initShaders(program);
 
     glEnable(GL_DEPTH_TEST);
-  } else {
-    // For performance mode, we still need GLFW for timing but don't need a window
-    if (!glfwInit()) {
-      std::cout << "Error: Could not initialize GLFW for timing!" << std::endl;
-      return false;
-    }
   }
+  // Skip all GLFW initialization in performance mode
+  // No need for GLFW timing in performance mode, we'll use std::chrono instead
 
   // Always initialize N-body simulation, regardless of visualization mode
   Boids::initSimulation(N_FOR_VIS);
@@ -460,30 +458,39 @@ void initShaders(GLuint * program) {
     // No data is moved (Win & Linux). When mapped to CUDA, OpenGL should not
     // use this buffer
 
-    float4 *dptr = NULL;
-    float *dptrVertPositions = NULL;
-    float *dptrVertVelocities = NULL;
-
-    cudaGLMapBufferObject((void**)&dptrVertPositions, boidVBO_positions);
-    cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
-
-    // execute the kernel
-    if (simulationMethod == 2) {
-      Boids::stepSimulationCoherentGrid(DT);
-    } else if (simulationMethod == 1) {
-      Boids::stepSimulationScatteredGrid(DT);
-    } else {
-      Boids::stepSimulationNaive(DT);
-    }
-
-    // Only copy to VBO if visualization is enabled
     if (enableVisualization) {
+      float4 *dptr = NULL;
+      float *dptrVertPositions = NULL;
+      float *dptrVertVelocities = NULL;
+
+      cudaGLMapBufferObject((void**)&dptrVertPositions, boidVBO_positions);
+      cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
+
+      // execute the kernel
+      if (simulationMethod == 2) {
+        Boids::stepSimulationCoherentGrid(DT);
+      } else if (simulationMethod == 1) {
+        Boids::stepSimulationScatteredGrid(DT);
+      } else {
+        Boids::stepSimulationNaive(DT);
+      }
+
+      // Copy positions and velocities to VBO for visualization
       Boids::copyBoidsToVBO(dptrVertPositions, dptrVertVelocities);
+      
+      // unmap buffer object
+      cudaGLUnmapBufferObject(boidVBO_positions);
+      cudaGLUnmapBufferObject(boidVBO_velocities);
+    } else {
+      // In performance test mode, just run the simulation without OpenGL
+      if (simulationMethod == 2) {
+        Boids::stepSimulationCoherentGrid(DT);
+      } else if (simulationMethod == 1) {
+        Boids::stepSimulationScatteredGrid(DT);
+      } else {
+        Boids::stepSimulationNaive(DT);
+      }
     }
-    
-    // unmap buffer object
-    cudaGLUnmapBufferObject(boidVBO_positions);
-    cudaGLUnmapBufferObject(boidVBO_velocities);
   }
 
   void mainLoop() {
@@ -497,32 +504,25 @@ void initShaders(GLuint * program) {
     int failedLaunches = 0;
 
     // Only run unit test in visualization mode
-    if (!perfTestMode) {
+    if (enableVisualization) {
       Boids::unitTest(); // Run the unit test only in visualization mode
     }
     
     if (perfTestMode) {
-      // Performance test mode - no visualization
-      
+      // Performance test mode - no visualization, using chrono for timing
       try {
         for (int i = 0; i < numFramesToMeasure; i++) {
-          double startTime = glfwGetTime();
+          // Use std::chrono for timing instead of glfwGetTime
+          auto startTime = std::chrono::high_resolution_clock::now();
           
-          // Execute the appropriate simulation method directly without OpenGL interaction
-          if (simulationMethod == 2) {
-            Boids::stepSimulationCoherentGrid(DT);
-          } else if (simulationMethod == 1) {
-            Boids::stepSimulationScatteredGrid(DT);
-          } else {
-            Boids::stepSimulationNaive(DT);
-          }
+          // Execute simulation step directly
+          runCUDA();
           
           cudaDeviceSynchronize();
           
-          double endTime = glfwGetTime();
-          totalSimTime += (endTime - startTime);
-          
-          // No progress messages to keep output clean
+          auto endTime = std::chrono::high_resolution_clock::now();
+          std::chrono::duration<double> elapsed = endTime - startTime;
+          totalSimTime += elapsed.count();
         }
       } catch (const std::exception& e) {
         std::cerr << "Error during simulation: " << e.what() << std::endl;
@@ -549,7 +549,7 @@ void initShaders(GLuint * program) {
       std::cout << "Failed Launches: " << failedLaunches << std::endl;
       std::cout << "=========================================" << std::endl;
     } else {
-      // Interactive visualization mode
+      // Interactive visualization mode - using GLFW for timing and rendering
       while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -573,26 +573,22 @@ void initShaders(GLuint * program) {
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Only draw if visualization is enabled
-        if (enableVisualization) {
-          glUseProgram(program[PROG_BOID]);
-          glBindVertexArray(boidVAO);
-          glPointSize((GLfloat)pointSize);
-          glDrawElements(GL_POINTS, N_FOR_VIS + 1, GL_UNSIGNED_INT, 0);
-          glPointSize(1.0f);
+        glUseProgram(program[PROG_BOID]);
+        glBindVertexArray(boidVAO);
+        glPointSize((GLfloat)pointSize);
+        glDrawElements(GL_POINTS, N_FOR_VIS + 1, GL_UNSIGNED_INT, 0);
+        glPointSize(1.0f);
 
-          glUseProgram(0);
-          glBindVertexArray(0);
+        glUseProgram(0);
+        glBindVertexArray(0);
 
-          glfwSwapBuffers(window);
-        }
+        glfwSwapBuffers(window);
       }
-    }
-    
-    if (enableVisualization) {
+      
+      // Clean up GLFW
       glfwDestroyWindow(window);
+      glfwTerminate();
     }
-    glfwTerminate();
   }
 
   void errorCallback(int error, const char *description) {

@@ -258,7 +258,7 @@ void Boids::copyBoidsToVBO(float *vbodptr_positions, float *vbodptr_velocities) 
 /**
 * Helper for kernUpdateVelocityBruteForce.
 * __device__ code can be called from a __global__ context
-* Compute the new velocity on the body with index `iSelf` due to the `N` boids
+* Compute  new velocity on the body with index `iSelf` due to the `N` boids
 * in the `pos` and `vel` arrays.
 */
 __device__ glm::vec3 computeVelocityChange(int N, int iSelf, const glm::vec3 *pos, const glm::vec3 *vel) {

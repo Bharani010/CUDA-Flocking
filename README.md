@@ -12,6 +12,20 @@ This project implements a real-time boid flocking simulation using CUDA to lever
 - **Interactive visualization** for real-time observation
 - **Performance testing mode** for benchmarking different methods
 - **Block size optimization** for finding optimal CUDA execution configurations
+- **Headless operation support** for running performance tests without a display
+
+## System Requirements
+
+### For Visualization Mode
+- CUDA-capable NVIDIA GPU
+- OpenGL 3.3+ support
+- GLFW and GLEW libraries
+- Display server (X11, Wayland, etc.)
+
+### For Performance Testing Only
+- CUDA-capable NVIDIA GPU
+- No GLFW, OpenGL, or display server required
+- Can run on headless servers and cloud instances
 
 ## Quick Start
 
@@ -76,6 +90,9 @@ To test how different CUDA block sizes affect performance across all methods:
 ```
 
 This will run a comprehensive test of all three methods (Naive, Scattered Grid, and Coherent Grid) with different block sizes (32, 64, 128, 256, 512, and 1024) to find the optimal execution configuration.
+
+### Headless Operation
+All performance test modes (`--perf-test` and `--perf-test-block-size`) can now run on headless systems without GLFW or display server requirements. The code automatically uses `std::chrono` for timing in performance test modes instead of GLFW, making it possible to benchmark on cloud servers and compute instances that don't have displays attached.
 
 ## Implementation Details
 

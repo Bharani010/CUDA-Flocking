@@ -603,15 +603,15 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
 	int gridY = boidGridPos.y;
 	int gridZ = boidGridPos.z;
 
-	// Reordered loops for z→y→x order (innermost→outermost) as requested for coherent memory access
-	for (int k = -1; k <= 1; k++) { // z-axis (outermost)
-		int neighborZ = min(max(gridZ + k, 0), gridResolution - 1);
+	// Reordered loops for x→y→z order (with x innermost) to improve memory coalescing
+	for (int i = -1; i <= 1; i++) { // x-axis (innermost)
+		int neighborX = min(max(gridX + i, 0), gridResolution - 1);
 
 		for (int j = -1; j <= 1; j++) { // y-axis (middle)
 			int neighborY = min(max(gridY + j, 0), gridResolution - 1);
 
-			for (int i = -1; i <= 1; i++) { // x-axis (innermost)
-				int neighborX = min(max(gridX + i, 0), gridResolution - 1);
+			for (int k = -1; k <= 1; k++) { // z-axis (outermost)
+				int neighborZ = min(max(gridZ + k, 0), gridResolution - 1);
 
 				int gridIndex = gridIndex3Dto1D(neighborX, neighborY, neighborZ, gridResolution);
 				if (gridCellStartIndices[gridIndex] != -1) {

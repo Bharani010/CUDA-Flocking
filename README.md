@@ -20,7 +20,7 @@ This project implements a real-time boid flocking simulation using CUDA to lever
 - CUDA-capable NVIDIA GPU
 - OpenGL 3.3+ support
 - GLFW and GLEW libraries
-- Display server (X11, Wayland, Xquartz)
+- Display server (X11, Wayland, XQuartz)
 
 ### For Performance Testing Only
 - CUDA-capable NVIDIA GPU

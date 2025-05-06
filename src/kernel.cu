@@ -3,6 +3,8 @@
 #include <cuda.h>
 #include <cmath>
 #include <glm/glm.hpp>
+/*below are the all the thrust libraries (c++ template) added for their specific functionality,
+this makes it easier to move data between the CPU and the GPU.*/
 #include <thrust/sort.h> // Required for thrust::sort_by_key
 #include <thrust/device_vector.h> // Required for thrust::device_ptr
 #include <thrust/functional.h> // Required for thrust::identity
